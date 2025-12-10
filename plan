@@ -1,0 +1,223 @@
+# XI2 Smooth Scrolling Implementation Plan
+
+## Goal
+Implement XI2 smooth scrolling support in deskflow/deskflow to enable modern touchpad scrolling behavior in Synergy 3.
+
+## Context
+- **Upstream repo**: deskflow/deskflow (Synergy 3 uses this as its engine)
+- **Current state**: Uses Button4/5 wheel events (legacy PS/2 style)
+- **Target**: XI2 valuator-based smooth scrolling
+- **Important**: PRs must follow contributing guidelines or will be closed immediately
+
+---
+
+## Phase 1: Setup & Baseline (Week 1)
+
+### 1.1 Fork & Clone
+- [x] Fork deskflow/deskflow on GitHub
+- [x] Clone fork locally
+- [x] Set up upstream remote tracking
+
+### 1.2 Build Environment
+- [x] Read Build Guide / Hacking Guide in wiki
+- [x] Install dependencies per guide
+  - Installed: cmake 4.2.0, Qt 6.9.3, OpenSSL 3.6.0
+- [x] Build deskflow-core successfully
+- [x] Build deskflow-gui successfully
+- [x] Verify builds pass tests
+  - Note: Some unit tests failed (I18NTests, IKeyStateTests, OSXKeyStateTests) but binaries built successfully
+  - Fixed pthread linking issue for macOS (pthread is automatic on macOS, no explicit linking needed)
+
+### 1.3 Test Setup
+- [ ] Set up two machines on LAN:
+  - Machine A: deskflow-server
+  - Machine B: deskflow-client
+- [ ] Establish baseline behavior:
+  - [ ] Test pointer movement (verify working)
+  - [ ] Test current scrolling (Button4/5 events)
+  - [ ] Document current scroll behavior (choppy, step-based)
+  - [ ] Test with various input devices:
+    - [ ] Traditional mouse with wheel
+    - [ ] Touchpad
+    - [ ] Trackball
+- [ ] Document "baseline broken" state for reference
+
+---
+
+## Phase 2: Code Investigation (Week 1-2)
+
+### 2.1 Locate X11 Input Backend
+- [ ] Find X11 input handling code
+- [ ] Identify pointer motion handling location
+- [ ] Locate Button4/5 wheel event handlers
+- [ ] Map code flow: input → internal messages
+
+### 2.2 Understand XI2 Implementation
+- [ ] Find existing XI2 motion handling code
+- [ ] Understand current XI2 subscription setup
+- [ ] Review valuator handling patterns
+- [ ] Identify where scroll valuators would fit
+
+### 2.3 Understand Internal Scroll Messages
+- [ ] Find Deskflow's internal scroll message format
+- [ ] Understand current delta representation (likely integer steps)
+- [ ] Determine if fractional deltas are supported
+- [ ] Map Button4/5 → internal message conversion
+
+---
+
+## Phase 3: Implementation (Week 2-3)
+
+### 3.1 XI2 Scroll Subscription
+- [ ] Extend XI2 setup to subscribe to scroll valuators
+- [ ] Add valuator mask for scroll axes
+- [ ] Handle valuator device changes
+
+### 3.2 Scroll Event Handling
+- [ ] Implement XI2 scroll valuator event handler
+- [ ] Extract delta values from valuator events
+- [ ] Convert valuator deltas to Deskflow scroll messages
+- [ ] Support fractional deltas (not just +1/-1 steps)
+
+### 3.3 Feature Flagging
+- [ ] Add config option: `experimental_xi2_smooth_scrolling` (or similar)
+- [ ] Add environment variable fallback: `DESKFLOW_XI2_SCROLL`
+- [ ] Make XI2 scroll opt-in initially (default: false)
+- [ ] Ensure Button4/5 fallback still works when disabled
+
+### 3.4 Code Quality
+- [ ] Follow Code Style guide from wiki
+- [ ] Follow build rules from wiki
+- [ ] Add appropriate comments
+- [ ] Ensure no memory leaks
+- [ ] Handle error cases gracefully
+
+---
+
+## Phase 4: Testing (Week 3-4)
+
+### 4.1 Platform Testing
+- [ ] Test on X11 (primary target)
+- [ ] Test on Wayland (if applicable)
+- [ ] Verify no regressions on either platform
+
+### 4.2 Device Testing
+- [ ] Test with various mice:
+  - [ ] Traditional wheel mouse
+  - [ ] High-resolution scroll wheel mouse
+- [ ] Test with various touchpads:
+  - [ ] Apple Magic Trackpad
+  - [ ] Linux touchpad (libinput)
+  - [ ] Windows Precision Touchpad (if applicable)
+- [ ] Test with trackball
+- [ ] Document device-specific behavior
+
+### 4.3 Application Testing
+- [ ] Test browsers (notoriously picky):
+  - [ ] Chrome/Chromium
+  - [ ] Firefox
+  - [ ] Safari (if applicable)
+- [ ] Test text editors:
+  - [ ] VS Code
+  - [ ] Vim/Neovim
+  - [ ] Emacs
+- [ ] Test terminal applications
+- [ ] Test GUI applications with custom scroll handling
+
+### 4.4 Edge Cases
+- [ ] Test rapid scrolling
+- [ ] Test slow/precise scrolling
+- [ ] Test horizontal scrolling (if supported)
+- [ ] Test with feature flag disabled (fallback behavior)
+- [ ] Test device hotplugging
+- [ ] Test multi-device scenarios
+
+---
+
+## Phase 5: Documentation & PR Prep (Week 4)
+
+### 5.1 Code Documentation
+- [ ] Ensure code is well-commented
+- [ ] Document config options
+- [ ] Document environment variables
+- [ ] Add code comments explaining XI2 valuator handling
+
+### 5.2 Commit History
+- [ ] Create clean branch: `feature/xi2-smooth-scrolling`
+- [ ] Organize commits logically:
+  - [ ] Setup/refactor commits (if needed)
+  - [ ] Feature implementation commits
+  - [ ] Test/validation commits
+- [ ] Write clear commit messages (~40 chars, per your preference)
+- [ ] Ensure each commit is coherent and builds
+
+### 5.3 PR Description
+- [ ] **Problem**: Document current choppy scroll, Button4/5 limitations
+- [ ] **Solution**: Explain XI2 valuator scroll implementation
+- [ ] **Changes**: List files changed, key functions added/modified
+- [ ] **Testing**: Document platforms tested, devices tested, apps tested
+- [ ] **Risks**: Note any edge cases or potential regressions
+- [ ] **Feature Flag**: Explain opt-in nature, migration path
+
+### 5.4 Pre-PR Validation
+- [ ] Run full test suite
+- [ ] Verify builds on clean checkout
+- [ ] Check code style compliance
+- [ ] Review against Contributing guidelines
+- [ ] Consider opening GitHub Discussion first (optional)
+- [ ] Consider Matrix/IRC discussion for design feedback (optional)
+
+---
+
+## Phase 6: PR Submission (Week 4-5)
+
+### 6.1 Open PR
+- [ ] Target: deskflow/deskflow → main (or branch specified in CONTRIBUTING)
+- [ ] Include comprehensive PR description
+- [ ] Link to any related issues/discussions
+- [ ] Tag appropriately
+
+### 6.2 Respond to Feedback
+- [ ] Address code review comments promptly
+- [ ] Make requested changes
+- [ ] Update tests if needed
+- [ ] Update documentation if needed
+
+### 6.3 Follow-up
+- [ ] Monitor PR for maintainer feedback
+- [ ] Be responsive to questions
+- [ ] If merged, celebrate! 🎉
+- [ ] If not merged, learn from feedback and iterate
+
+---
+
+## Success Criteria
+
+- [ ] XI2 smooth scrolling works on X11
+- [ ] Feature is opt-in via config/env var
+- [ ] No regressions in existing scroll behavior
+- [ ] Works with various input devices
+- [ ] PR accepted upstream
+- [ ] Code follows project style guidelines
+
+---
+
+## Notes
+
+- **Upstream first**: All work happens in deskflow/deskflow, not Synergy
+- **Quality matters**: "AI-trash PRs will be closed immediately" - follow guidelines strictly
+- **Incremental**: Feature flag allows safe, gradual rollout
+- **Testing is critical**: Various devices and apps must work correctly
+
+---
+
+## Timeline Estimate
+
+- **Phase 1**: 3-5 days
+- **Phase 2**: 3-5 days
+- **Phase 3**: 5-7 days
+- **Phase 4**: 5-7 days
+- **Phase 5**: 2-3 days
+- **Phase 6**: Variable (depends on maintainer response)
+
+**Total**: ~4-5 weeks for initial implementation + PR cycle
