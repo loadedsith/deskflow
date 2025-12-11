@@ -459,13 +459,23 @@ ClientListener *ServerApp::openClientListener(const NetworkAddress &address)
 {
   using enum SecurityLevel;
   auto securityLevel = PlainText;
-  if (Settings::value(Settings::Security::TlsEnabled).toBool()) {
-    if (Settings::value(Settings::Security::CheckPeers).toBool()) {
+  const bool tlsEnabled = Settings::value(Settings::Security::TlsEnabled).toBool();
+  const bool checkPeers = Settings::value(Settings::Security::CheckPeers).toBool();
+  LOG_IPC("ServerApp::openClientListener: tlsEnabled=%s, checkPeers=%s",
+           tlsEnabled ? "true" : "false", checkPeers ? "true" : "false");
+
+  if (tlsEnabled) {
+    if (checkPeers) {
       securityLevel = PeerAuth;
     } else {
       securityLevel = Encrypted;
     }
   }
+
+  const char* levelStr = (securityLevel == PlainText) ? "PlainText" :
+                         (securityLevel == Encrypted) ? "Encrypted" :
+                         (securityLevel == PeerAuth) ? "PeerAuth" : "Unknown";
+  LOG_IPC("ServerApp::openClientListener: creating ClientListener with SecurityLevel=%s", levelStr);
 
   auto *listen = new ClientListener(getAddress(address), getSocketFactory(), getEvents(), securityLevel);
 

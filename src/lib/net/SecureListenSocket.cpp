@@ -10,6 +10,7 @@
 #include "SecureSocket.h"
 #include "arch/Arch.h"
 #include "arch/ArchException.h"
+#include "base/Log.h"
 #include "common/Settings.h"
 #include "net/SocketMultiplexer.h"
 
@@ -32,19 +33,27 @@ std::unique_ptr<IDataSocket> SecureListenSocket::accept()
 {
   std::unique_ptr<SecureSocket> secureSocket;
   try {
+    LOG_IPC("SecureListenSocket: accepting new client connection");
+    auto acceptedSocket = ARCH->acceptSocket(socket(), nullptr);
     secureSocket = std::make_unique<SecureSocket>(
-        events(), socketMultiplexer(), ARCH->acceptSocket(socket(), nullptr), m_securityLevel
+        events(), socketMultiplexer(), acceptedSocket, m_securityLevel
     );
     secureSocket->initSsl(true);
 
     setListeningJob();
 
     // default location of the TLS cert file in users dir
-    if (!secureSocket->loadCertificate(Settings::value(Settings::Security::Certificate).toString())) {
+    const auto certPath = Settings::value(Settings::Security::Certificate).toString();
+    LOG_IPC("SecureListenSocket: loading certificate from: %s", qPrintable(certPath));
+    if (!secureSocket->loadCertificate(certPath)) {
+      LOG_IPC("SecureListenSocket: FAILED to load certificate, rejecting connection");
       return nullptr;
     }
+    LOG_IPC("SecureListenSocket: certificate loaded successfully");
 
-    secureSocket->secureAccept();
+    LOG_IPC("SecureListenSocket: starting TLS handshake (secureAccept - async)");
+    secureSocket->secureAccept();  // This sets up async TLS handshake via serviceAccept
+    LOG_IPC("SecureListenSocket: secureAccept() called, returning socket");
 
     return secureSocket;
   } catch (ArchNetworkException &) {

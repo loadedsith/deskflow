@@ -35,6 +35,11 @@ ClientListener::ClientListener(
 {
   assert(m_socketFactory != nullptr);
 
+  const char* levelStr = (securityLevel == SecurityLevel::PlainText) ? "PlainText" :
+                         (securityLevel == SecurityLevel::Encrypted) ? "Encrypted" :
+                         (securityLevel == SecurityLevel::PeerAuth) ? "PeerAuth" : "Unknown";
+  LOG_IPC("ClientListener: creating listener with SecurityLevel=%s", levelStr);
+
   try {
     start();
   } catch (SocketAddressInUseException &) {
@@ -46,7 +51,8 @@ ClientListener::ClientListener(
     m_socketFactory.reset();
     throw;
   }
-  LOG_DEBUG1("listening for clients");
+  LOG_IPC("ClientListener: listening for clients on %s:%d (SecurityLevel=%s)",
+           address.getHostname().c_str(), address.getPort(), levelStr);
 }
 
 ClientListener::~ClientListener()
@@ -124,11 +130,15 @@ void ClientListener::removeUnknownClient(ClientProxyUnknown *unknownClient)
 
 void ClientListener::handleClientConnecting()
 {
+  LOG_IPC("ClientListener: handleClientConnecting() - new connection attempt");
   // accept client connection
   auto socket = m_listen->accept();
 
-  if (!socket)
+  if (!socket) {
+    LOG_WARN("ClientListener: handleClientConnecting() - accept() returned nullptr");
     return;
+  }
+  LOG_IPC("ClientListener: handleClientConnecting() - accept() succeeded, socket created");
 
   auto rawSocketPointer = socket.release();
   m_clientSockets.insert(rawSocketPointer);

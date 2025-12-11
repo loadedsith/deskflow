@@ -101,9 +101,11 @@ void SecureSocket::secureConnect()
 
 void SecureSocket::secureAccept()
 {
+  LOG_IPC("SecureSocket: setting up async TLS handshake (secureAccept called)");
   setJob(new TSocketMultiplexerMethodJob<SecureSocket>(
       this, &SecureSocket::serviceAccept, getSocket(), isReadable(), isWritable()
   ));
+  LOG_IPC("SecureSocket: async TLS handshake job created");
 }
 
 TCPSocket::JobResult SecureSocket::doRead()
@@ -290,16 +292,20 @@ bool SecureSocket::loadCertificate(const QString &filename)
   std::scoped_lock ssl_lock{ssl_mutex_};
 
   if (filename.isEmpty()) {
+    LOG_IPC("SecureSocket::loadCertificate: ERROR - certificate path is empty");
     SslLogger::logError("tls certificate is not specified");
     return false;
   }
 
+  LOG_IPC("SecureSocket::loadCertificate: checking certificate file: %s", qPrintable(filename));
   if (!QFile::exists(filename)) {
+    LOG_IPC("SecureSocket::loadCertificate: ERROR - certificate file does not exist: %s", qPrintable(filename));
     std::string errorMsg("tls certificate doesn't exist: ");
     errorMsg.append(filename.toStdString());
     SslLogger::logError(errorMsg.c_str());
     return false;
   }
+  LOG_IPC("SecureSocket::loadCertificate: certificate file exists, loading...");
 
   const auto fName = filename.toStdString();
 
@@ -401,6 +407,7 @@ int SecureSocket::secureAccept(int socket)
 {
   std::scoped_lock ssl_lock{ssl_mutex_};
 
+  LOG_INFO("TLS handshake starting (server accepting connection)");
   createSSL();
 
   // set connection socket to SSL state
@@ -411,12 +418,19 @@ int SecureSocket::secureAccept(int socket)
 
   static int retry;
 
+  int sslError = SSL_get_error(m_ssl->m_ssl, r);
+  LOG_IPC("SecureSocket::secureAccept: SSL_accept returned %d, SSL_get_error=%d", r, sslError);
+
   checkResult(r, retry);
 
   if (isFatal()) {
     // tell user and sleep so the socket isn't hammered.
+    LOG_IPC("SecureSocket::secureAccept: FATAL error detected, TLS handshake failed");
+    LOG_IPC("SecureSocket::secureAccept: SSL_accept=%d, SSL_get_error=%d", r, sslError);
     LOG_ERR("failed to accept secure socket");
     LOG_WARN("client connection may not be secure");
+    LOG_IPC("SecureSocket::secureAccept: This usually means the client has TLS disabled (tlsEnabled=false)");
+    SslLogger::logError();  // Log OpenSSL error details
     m_secureReady = false;
     Arch::sleep(1);
     retry = 0;
@@ -427,12 +441,16 @@ int SecureSocket::secureAccept(int socket)
   if (retry == 0) {
     if (m_securityLevel == SecurityLevel::PeerAuth) {
       const bool checkPeerFingerprints = Settings::value(Settings::Security::CheckPeers).toBool();
+      LOG_INFO("TLS client fingerprint verification: checkPeerFingerprints=%s", checkPeerFingerprints ? "enabled" : "disabled");
       if (checkPeerFingerprints && !verifyCertFingerprint(Settings::tlsTrustedClientsDb())) {
+        LOG_ERR("TLS client certificate fingerprint verification FAILED");
         retry = 0;
         disconnect();
         return -1; // Fail
       } else if (!checkPeerFingerprints) {
-        LOG_DEBUG("skipping client certificate fingerprint verification (checkPeerFingerprints disabled)");
+        LOG_INFO("TLS client certificate fingerprint verification SKIPPED (checkPeerFingerprints disabled)");
+      } else {
+        LOG_INFO("TLS client certificate fingerprint verification PASSED");
       }
     }
     m_secureReady = true;
@@ -457,6 +475,7 @@ int SecureSocket::secureAccept(int socket)
 
 int SecureSocket::secureConnect(int socket)
 {
+  LOG_INFO("TLS handshake starting (client connecting to server)");
   if (!loadCertificate(Settings::value(Settings::Security::Certificate).toString())) {
     LOG_ERR("could not load client certificates");
     disconnect();
@@ -499,14 +518,17 @@ int SecureSocket::secureConnect(int socket)
   // No error, set ready, process and return ok
   m_secureReady = true;
   const bool checkPeerFingerprints = Settings::value(Settings::Security::CheckPeers).toBool();
+  LOG_INFO("TLS server fingerprint verification: checkPeerFingerprints=%s", checkPeerFingerprints ? "enabled" : "disabled");
   if (checkPeerFingerprints) {
     if (!verifyCertFingerprint(Settings::tlsTrustedServersDb())) {
-      LOG_ERR("failed to verify server certificate fingerprint");
+      LOG_ERR("TLS server certificate fingerprint verification FAILED");
       disconnect();
       return -1; // Fingerprint failed, error
+    } else {
+      LOG_INFO("TLS server certificate fingerprint verification PASSED");
     }
   } else {
-    LOG_DEBUG("skipping server certificate fingerprint verification (checkPeerFingerprints disabled)");
+    LOG_INFO("TLS server certificate fingerprint verification SKIPPED (checkPeerFingerprints disabled)");
   }
   LOG_INFO("connected to secure socket");
   if (!showCertificate()) {
@@ -697,6 +719,7 @@ ISocketMultiplexerJob *SecureSocket::serviceAccept(ISocketMultiplexerJob *const,
 {
   Lock lock(&getMutex());
 
+  LOG_IPC("SecureSocket::serviceAccept: TLS handshake in progress (async)");
   int status = 0;
 #ifdef SYSAPI_WIN32
   status = secureAccept(static_cast<int>(getSocket()->m_socket));
@@ -705,11 +728,14 @@ ISocketMultiplexerJob *SecureSocket::serviceAccept(ISocketMultiplexerJob *const,
 #endif
   // If status < 0, error happened
   if (status < 0) {
+    LOG_IPC("SecureSocket::serviceAccept: TLS handshake FAILED (status=%d)", status);
+    LOG_IPC("SecureSocket::serviceAccept: This usually means the client doesn't support TLS or has TLS disabled");
     return nullptr;
   }
 
   // If status > 0, success
   if (status > 0) {
+    LOG_IPC("SecureSocket::serviceAccept: TLS handshake SUCCESS, sending ClientListenerAccepted event");
     sendEvent(EventTypes::ClientListenerAccepted);
     return newJob();
   }
