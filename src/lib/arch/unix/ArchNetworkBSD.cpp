@@ -48,7 +48,7 @@ int ArchNetworkBSD::Deps::poll(struct pollfd *fds, nfds_t nfds, int timeout)
 
 std::shared_ptr<struct pollfd[]> ArchNetworkBSD::Deps::makePollFD(nfds_t n)
 {
-  return std::make_shared<struct pollfd[]>(n);
+  return std::shared_ptr<struct pollfd[]>(new struct pollfd[n], std::default_delete<struct pollfd[]>());
 }
 
 ssize_t ArchNetworkBSD::Deps::read(int fd, void *buf, size_t len)

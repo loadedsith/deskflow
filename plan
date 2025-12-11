@@ -227,3 +227,17 @@ Implement XI2 smooth scrolling support in deskflow/deskflow to enable modern tou
 - **Phase 6**: Variable (depends on maintainer response)
 
 **Total**: ~4-5 weeks for initial implementation + PR cycle
+
+## Test Machine Setup (Phase 1.3)
+
+**Machine One (Server):**
+- IPs: 192.168.1.137 / 192.168.1.206
+- Hostname: gheath-ltmxwm4.internal.salesforce.com
+- Role: deskflow-server
+
+**Machine Two (Client - Current):**
+- IP: 192.168.1.180
+- Hostname: pop-os
+- Role: deskflow-client
+- Status: Build complete, ready for testing
+
