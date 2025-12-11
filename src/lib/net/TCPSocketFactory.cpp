@@ -11,6 +11,7 @@
 #include "net/SecureSocket.h"
 #include "net/TCPListenSocket.h"
 #include "net/TCPSocket.h"
+#include "base/Log.h"
 
 //
 // TCPSocketFactory
@@ -25,11 +26,18 @@ TCPSocketFactory::TCPSocketFactory(IEventQueue *events, SocketMultiplexer *socke
 
 IDataSocket *TCPSocketFactory::create(IArchNetwork::AddressFamily family, SecurityLevel securityLevel) const
 {
+  const char* levelStr = (securityLevel == SecurityLevel::PlainText) ? "PlainText" :
+                         (securityLevel == SecurityLevel::Encrypted) ? "Encrypted" :
+                         (securityLevel == SecurityLevel::PeerAuth) ? "PeerAuth" : "Unknown";
+  LOG_IPC("TCPSocketFactory::create: SecurityLevel=%s", levelStr);
+  
   if (securityLevel != SecurityLevel::PlainText) {
+    LOG_IPC("TCPSocketFactory::create: Creating SecureSocket (TLS enabled)");
     auto *secureSocket = new SecureSocket(m_events, m_socketMultiplexer, family, securityLevel);
     secureSocket->initSsl(false);
     return secureSocket;
   } else {
+    LOG_IPC("TCPSocketFactory::create: Creating TCPSocket (TLS DISABLED - PlainText)");
     return new TCPSocket(m_events, m_socketMultiplexer, family);
   }
 }
