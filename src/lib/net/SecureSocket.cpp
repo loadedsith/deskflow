@@ -493,16 +493,17 @@ int SecureSocket::secureConnect(int socket)
   retry = 0;
   // No error, set ready, process and return ok
   m_secureReady = true;
-  if (verifyCertFingerprint(Settings::tlsTrustedServersDb())) {
-    LOG_INFO("connected to secure socket");
-    if (!showCertificate()) {
-      disconnect();
-      return -1; // Cert fail, error
-    }
-  } else {
+  // Only verify fingerprint if checkPeerFingerprints is enabled
+  const bool checkPeers = Settings::value(Settings::Security::CheckPeers).toBool();
+  if (checkPeers && !verifyCertFingerprint(Settings::tlsTrustedServersDb())) {
     LOG_ERR("failed to verify server certificate fingerprint");
     disconnect();
     return -1; // Fingerprint failed, error
+  }
+  LOG_INFO("connected to secure socket");
+  if (!showCertificate()) {
+    disconnect();
+    return -1; // Cert fail, error
   }
   LOG_DEBUG2("connected secure socket");
   SslLogger::logSecureCipherInfo(m_ssl->m_ssl);
@@ -629,19 +630,23 @@ bool SecureSocket::verifyCertFingerprint(const QString &FingerprintDatabasePath)
 
   QFile file(FingerprintDatabasePath);
 
+  // If database file doesn't exist, trust by default (no database to check against)
+  if (!file.exists()) {
+    LOG_DEBUG("no trusted fingerprints database file, accepting connection");
+    return true;
+  }
+
   FingerprintDatabase db;
   db.read(FingerprintDatabasePath);
   const bool emptyDB = db.fingerprints().empty();
 
   const auto &path = FingerprintDatabasePath;
-  if (file.exists() && emptyDB) {
+  if (emptyDB) {
     LOG_ERR("failed to open trusted fingerprints file: %s", qPrintable(path));
     return false;
   }
 
-  if (!emptyDB) {
-    LOG_DEBUG("read %d fingerprint(s) from file: %s", db.fingerprints().size(), qPrintable(path));
-  }
+  LOG_DEBUG("read %d fingerprint(s) from file: %s", db.fingerprints().size(), qPrintable(path));
 
   if (!db.isTrusted(sha256)) {
     LOG_WARN("fingerprint does not match trusted fingerprint");
