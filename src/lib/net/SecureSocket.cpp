@@ -407,7 +407,10 @@ int SecureSocket::secureAccept(int socket)
 {
   std::scoped_lock ssl_lock{ssl_mutex_};
 
-  LOG_INFO("TLS handshake starting (server accepting connection)");
+  // Reset fatal flag at start of each handshake attempt
+  isFatal(false);
+
+  LOG_IPC("SecureSocket::secureAccept: TLS handshake starting (server accepting connection)");
   createSSL();
 
   // set connection socket to SSL state
@@ -417,11 +420,22 @@ int SecureSocket::secureAccept(int socket)
   int r = SSL_accept(m_ssl->m_ssl);
 
   static int retry;
+  // Only reset retry counter when starting a NEW handshake (SSL object was just created)
+  // Don't reset on retries - we need retry to accumulate to detect stuck handshakes
+  const bool isNewHandshake = (retry == 0 && !m_secureReady);
+  if (isNewHandshake) {
+    retry = 0;  // Explicitly set to 0 for new handshake
+    LOG_IPC("SecureSocket::secureAccept: Starting new TLS handshake, retry counter = 0");
+  } else if (retry > 0) {
+    LOG_IPC("SecureSocket::secureAccept: Continuing TLS handshake retry, retry counter = %d", retry);
+  }
 
   int sslError = SSL_get_error(m_ssl->m_ssl, r);
   LOG_IPC("SecureSocket::secureAccept: SSL_accept returned %d, SSL_get_error=%d", r, sslError);
 
   checkResult(r, retry);
+
+  LOG_IPC("SecureSocket::secureAccept: after checkResult - retry=%d, isFatal()=%s", retry, isFatal() ? "true" : "false");
 
   if (isFatal()) {
     // tell user and sleep so the socket isn't hammered.
@@ -462,6 +476,17 @@ int SecureSocket::secureAccept(int socket)
 
   // If not fatal and retry is set, not ready, and return retry
   if (retry > 0) {
+    // Add a maximum retry limit to prevent infinite loops
+    const int MAX_RETRIES = 100;
+    if (retry > MAX_RETRIES) {
+      LOG_IPC("SecureSocket::secureAccept: Maximum retry count (%d) exceeded, giving up", MAX_RETRIES);
+      LOG_ERR("TLS handshake failed: too many retries (client may not be sending TLS data)");
+      SslLogger::logError();
+      retry = 0;
+      isFatal(true);
+      return -1;
+    }
+    LOG_IPC("SecureSocket::secureAccept: RETRY needed (retry=%d/%d), returning 0", retry, MAX_RETRIES);
     LOG_DEBUG2("retry accepting secure socket");
     m_secureReady = false;
     Arch::sleep(s_retryDelay);
@@ -475,12 +500,19 @@ int SecureSocket::secureAccept(int socket)
 
 int SecureSocket::secureConnect(int socket)
 {
-  LOG_INFO("TLS handshake starting (client connecting to server)");
-  if (!loadCertificate(Settings::value(Settings::Security::Certificate).toString())) {
-    LOG_ERR("could not load client certificates");
+  const bool tlsEnabled = Settings::value(Settings::Security::TlsEnabled).toBool();
+  const bool checkPeers = Settings::value(Settings::Security::CheckPeers).toBool();
+  const QString certPath = Settings::value(Settings::Security::Certificate).toString();
+  LOG_IPC("SecureSocket::secureConnect: TLS handshake starting (client connecting to server)");
+  LOG_IPC("SecureSocket::secureConnect: tlsEnabled=%s, checkPeers=%s, certPath=%s",
+          tlsEnabled ? "true" : "false", checkPeers ? "true" : "false", qPrintable(certPath));
+
+  if (!loadCertificate(certPath)) {
+    LOG_ERR("could not load client certificates from: %s", qPrintable(certPath));
     disconnect();
     return -1;
   }
+  LOG_IPC("SecureSocket::secureConnect: Certificate loaded successfully");
 
   std::scoped_lock ssl_lock{ssl_mutex_};
 
@@ -620,7 +652,9 @@ void SecureSocket::checkResult(int status, int &retry)
     break;
 
   case SSL_ERROR_SSL:
+    LOG_IPC("SecureSocket::checkResult: SSL_ERROR_SSL (error code 6) - TLS protocol error detected");
     LOG_ERR("tls error occurred (generic failure)");
+    SslLogger::logError();  // Log detailed OpenSSL error to see what went wrong
     isFatal(true);
     break;
 
@@ -691,6 +725,7 @@ ISocketMultiplexerJob *SecureSocket::serviceConnect(ISocketMultiplexerJob *const
 {
   Lock lock(&getMutex());
 
+  LOG_IPC("SecureSocket::serviceConnect: TLS handshake in progress (async, client side)");
   int status = 0;
 #ifdef SYSAPI_WIN32
   status = secureConnect(static_cast<int>(getSocket()->m_socket));
@@ -700,16 +735,19 @@ ISocketMultiplexerJob *SecureSocket::serviceConnect(ISocketMultiplexerJob *const
 
   // If status < 0, error happened
   if (status < 0) {
+    LOG_IPC("SecureSocket::serviceConnect: TLS handshake FAILED (status=%d)", status);
     return nullptr;
   }
 
   // If status > 0, success
   if (status > 0) {
+    LOG_IPC("SecureSocket::serviceConnect: TLS handshake SUCCESS, sending DataSocketSecureConnected event");
     sendEvent(EventTypes::DataSocketSecureConnected);
     return newJob();
   }
 
   // Retry case
+  LOG_IPC("SecureSocket::serviceConnect: TLS handshake needs retry (status=0), scheduling retry");
   return new TSocketMultiplexerMethodJob<SecureSocket>(
       this, &SecureSocket::serviceConnect, getSocket(), isReadable(), isWritable()
   );
@@ -752,5 +790,11 @@ void SecureSocket::handleTCPConnected(const Event &)
     LOG_DEBUG("disregarding stale connect event");
     return;
   }
+
+  LOG_IPC("SecureSocket::handleTCPConnected: TCP connection established, initiating TLS handshake");
+  LOG_IPC("SecureSocket::handleTCPConnected: SecurityLevel=%s",
+          (m_securityLevel == SecurityLevel::PlainText) ? "PlainText" :
+          (m_securityLevel == SecurityLevel::Encrypted) ? "Encrypted" :
+          (m_securityLevel == SecurityLevel::PeerAuth) ? "PeerAuth" : "Unknown");
   secureConnect();
 }

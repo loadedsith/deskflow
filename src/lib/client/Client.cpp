@@ -48,6 +48,9 @@ Client::Client(
 {
   assert(m_socketFactory != nullptr);
   assert(m_screen != nullptr);
+  const bool tlsEnabled = Settings::value(Settings::Security::TlsEnabled).toBool();
+  LOG_IPC("Client::Client: TLS settings - tlsEnabled=%s, m_useSecureNetwork=%s",
+          tlsEnabled ? "true" : "false", m_useSecureNetwork ? "true" : "false");
 
   // register suspend/resume event handlers
   m_events->addHandler(EventTypes::ScreenSuspend, getEventTarget(), [this](const auto &) { handleSuspend(); });
@@ -90,6 +93,11 @@ void Client::connect(size_t addressIndex)
   }
 
   auto securityLevel = m_useSecureNetwork ? SecurityLevel::PeerAuth : SecurityLevel::PlainText;
+  const char* levelStr = (securityLevel == SecurityLevel::PlainText) ? "PlainText" :
+                         (securityLevel == SecurityLevel::Encrypted) ? "Encrypted" :
+                         (securityLevel == SecurityLevel::PeerAuth) ? "PeerAuth" : "Unknown";
+  LOG_IPC("Client::connect: m_useSecureNetwork=%s, SecurityLevel=%s",
+          m_useSecureNetwork ? "true" : "false", levelStr);
 
   try {
     // resolve the server hostname.  do this every time we connect
@@ -109,6 +117,7 @@ void Client::connect(size_t addressIndex)
     }
 
     // create the socket
+    LOG_IPC("Client::connect: creating socket with SecurityLevel=%s", levelStr);
     IDataSocket *socket = m_socketFactory->create(ARCH->getAddrFamily(m_serverAddress.getAddress()), securityLevel);
     bindNetworkInterface(socket);
 
@@ -379,11 +388,17 @@ void Client::setupConnecting()
 {
   assert(m_stream != nullptr);
 
-  if (Settings::value(Settings::Security::TlsEnabled).toBool()) {
+  const bool tlsEnabled = Settings::value(Settings::Security::TlsEnabled).toBool();
+  LOG_IPC("Client::setupConnecting: tlsEnabled=%s (from Settings), m_useSecureNetwork=%s",
+          tlsEnabled ? "true" : "false", m_useSecureNetwork ? "true" : "false");
+
+  if (tlsEnabled) {
+    LOG_IPC("Client::setupConnecting: Waiting for DataSocketSecureConnected event (TLS)");
     m_events->addHandler(EventTypes::DataSocketSecureConnected, m_stream->getEventTarget(), [this](const auto &) {
       handleConnected();
     });
   } else {
+    LOG_IPC("Client::setupConnecting: Waiting for DataSocketConnected event (PlainText)");
     m_events->addHandler(EventTypes::DataSocketConnected, m_stream->getEventTarget(), [this](const auto &) {
       handleConnected();
     });
