@@ -29,9 +29,15 @@ Implement XI2 smooth scrolling support in deskflow/deskflow to enable modern tou
   - Fixed pthread linking issue for macOS (pthread is automatic on macOS, no explicit linking needed)
 
 ### 1.3 Test Setup
-- [ ] Set up two machines on LAN:
-  - Machine A: deskflow-server
-  - Machine B: deskflow-client
+- [x] Set up two machines on LAN:
+  - Machine A (Server): 192.168.1.137/192.168.1.206 - gheath-ltmxwm4.internal.salesforce.com (macOS)
+  - Machine B (Client): 192.168.1.180 - pop-os (Linux/Pop!_OS)
+- [x] Network connectivity established:
+  - ✅ TLS disabled: Connections work reliably
+  - ❌ TLS enabled: Connections fail (TLS handshake issue)
+  - **Configuration**: Using `tlsEnabled=false` for testing
+  - Server config: `deskflow-server.conf` with screens and links configured
+  - Key remapping: Synergy-style config applied (super/ctrl swap for Linux client)
 - [ ] Establish baseline behavior:
   - [ ] Test pointer movement (verify working)
   - [ ] Test current scrolling (Button4/5 events)
