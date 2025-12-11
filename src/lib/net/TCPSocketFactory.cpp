@@ -30,7 +30,7 @@ IDataSocket *TCPSocketFactory::create(IArchNetwork::AddressFamily family, Securi
                          (securityLevel == SecurityLevel::Encrypted) ? "Encrypted" :
                          (securityLevel == SecurityLevel::PeerAuth) ? "PeerAuth" : "Unknown";
   LOG_IPC("TCPSocketFactory::create: SecurityLevel=%s", levelStr);
-  
+
   if (securityLevel != SecurityLevel::PlainText) {
     LOG_IPC("TCPSocketFactory::create: Creating SecureSocket (TLS enabled)");
     auto *secureSocket = new SecureSocket(m_events, m_socketMultiplexer, family, securityLevel);
