@@ -84,10 +84,15 @@ Client::~Client()
 
 void Client::connect(size_t addressIndex)
 {
+  LOG_IPC("Client::connect: ENTRY - addressIndex=%zu", addressIndex);
+  LOG_IPC("Client::connect: m_stream=%p, m_suspended=%s", m_stream, m_suspended ? "true" : "false");
+
   if (m_stream != nullptr) {
+    LOG_IPC("Client::connect: EXIT early - stream already exists");
     return;
   }
   if (m_suspended) {
+    LOG_IPC("Client::connect: EXIT early - suspended, will connect on resume");
     m_connectOnResume = true;
     return;
   }
@@ -114,11 +119,16 @@ void Client::connect(size_t addressIndex)
           "connecting to '%s': %s:%i", m_serverAddress.getHostname().c_str(),
           ARCH->addrToString(m_serverAddress.getAddress()).c_str(), m_serverAddress.getPort()
       );
+      LOG_IPC("Client::connect: About to create socket - m_useSecureNetwork=%s, SecurityLevel=%s",
+              m_useSecureNetwork ? "true" : "false", levelStr);
+    } else {
+      LOG_IPC("Client::connect: WARNING - server address is null!");
     }
 
     // create the socket
-    LOG_IPC("Client::connect: creating socket with SecurityLevel=%s", levelStr);
+    LOG_IPC("Client::connect: Calling socketFactory->create() with SecurityLevel=%s", levelStr);
     IDataSocket *socket = m_socketFactory->create(ARCH->getAddrFamily(m_serverAddress.getAddress()), securityLevel);
+    LOG_IPC("Client::connect: Socket created - socket=%p", socket);
     bindNetworkInterface(socket);
 
     // filter socket messages, including a packetizing filter
