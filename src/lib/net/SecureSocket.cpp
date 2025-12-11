@@ -425,10 +425,15 @@ int SecureSocket::secureAccept(int socket)
 
   // If not fatal and no retry, state is good
   if (retry == 0) {
-    if (m_securityLevel == SecurityLevel::PeerAuth && !verifyCertFingerprint(Settings::tlsTrustedClientsDb())) {
-      retry = 0;
-      disconnect();
-      return -1; // Fail
+    if (m_securityLevel == SecurityLevel::PeerAuth) {
+      const bool checkPeerFingerprints = Settings::value(Settings::Security::CheckPeers).toBool();
+      if (checkPeerFingerprints && !verifyCertFingerprint(Settings::tlsTrustedClientsDb())) {
+        retry = 0;
+        disconnect();
+        return -1; // Fail
+      } else if (!checkPeerFingerprints) {
+        LOG_DEBUG("skipping client certificate fingerprint verification (checkPeerFingerprints disabled)");
+      }
     }
     m_secureReady = true;
     LOG_INFO("accepted secure socket");
@@ -493,12 +498,15 @@ int SecureSocket::secureConnect(int socket)
   retry = 0;
   // No error, set ready, process and return ok
   m_secureReady = true;
-  // Only verify fingerprint if checkPeerFingerprints is enabled
-  const bool checkPeers = Settings::value(Settings::Security::CheckPeers).toBool();
-  if (checkPeers && !verifyCertFingerprint(Settings::tlsTrustedServersDb())) {
-    LOG_ERR("failed to verify server certificate fingerprint");
-    disconnect();
-    return -1; // Fingerprint failed, error
+  const bool checkPeerFingerprints = Settings::value(Settings::Security::CheckPeers).toBool();
+  if (checkPeerFingerprints) {
+    if (!verifyCertFingerprint(Settings::tlsTrustedServersDb())) {
+      LOG_ERR("failed to verify server certificate fingerprint");
+      disconnect();
+      return -1; // Fingerprint failed, error
+    }
+  } else {
+    LOG_DEBUG("skipping server certificate fingerprint verification (checkPeerFingerprints disabled)");
   }
   LOG_INFO("connected to secure socket");
   if (!showCertificate()) {
