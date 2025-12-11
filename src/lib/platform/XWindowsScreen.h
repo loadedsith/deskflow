@@ -134,6 +134,8 @@ private:
   bool detectXI2();
 #ifdef HAVE_XI2
   void selectXIRawMotion();
+  void detectScrollValuators();
+  void handleXIRawMotionScroll(XIRawEvent *rawEvent);
 #endif
   void selectEvents(Window) const;
   void doSelectEvents(Window) const;
@@ -239,6 +241,15 @@ private:
   int m_xkbEventBase;
 
   bool m_xi2detected = false;
+
+  // XI2 scroll valuator support
+  struct ScrollRemainder {
+    double x;
+    double y;
+  };
+  ScrollRemainder m_scrollRemainder{0.0, 0.0};
+  int m_scrollValuatorX = -1;  // Valuator ID for horizontal scroll (typically 6)
+  int m_scrollValuatorY = -1;  // Valuator ID for vertical scroll (typically 7)
 
   // XRandR extension stuff
   bool m_xrandr = false;

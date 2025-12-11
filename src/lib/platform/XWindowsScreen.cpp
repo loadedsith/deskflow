@@ -31,6 +31,7 @@
 #include <X11/X.h>
 #include <X11/Xutil.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #define XK_MISCELLANY
@@ -1177,6 +1178,13 @@ void XWindowsScreen::handleSystemEvent(const Event &event)
     auto *cookie = &xevent->xcookie;
     if (XGetEventData(m_display, cookie) && cookie->type == GenericEvent && cookie->extension == xi_opcode) {
       if (cookie->evtype == XI_RawMotion) {
+        XIRawEvent *rawEvent = static_cast<XIRawEvent *>(cookie->data);
+
+        // Check for scroll valuator changes first
+        if (m_scrollValuatorX >= 0 || m_scrollValuatorY >= 0) {
+          handleXIRawMotionScroll(rawEvent);
+        }
+
         // Get current pointer's position
         XMotionEvent xmotion;
         xmotion.type = MotionNotify;
@@ -1963,5 +1971,142 @@ void XWindowsScreen::selectXIRawMotion()
   XISetMask(mask.mask, XI_RawMotion);
   XISelectEvents(m_display, DefaultRootWindow(m_display), &mask, 1);
   free(mask.mask);
+
+  // Detect scroll valuators after setting up event subscription
+  detectScrollValuators();
+}
+
+void XWindowsScreen::detectScrollValuators()
+{
+  // Query all devices to find scroll valuators
+  // Scroll valuators are typically valuator 6 (SCROLL_X) and 7 (SCROLL_Y)
+  int numDevices = 0;
+  XIDeviceInfo *devices = XIQueryDevice(m_display, XIAllDevices, &numDevices);
+
+  if (!devices) {
+    LOG_DEBUG("XI2: Failed to query devices for scroll valuators");
+    return;
+  }
+
+  // Standard scroll valuator IDs (XInput2 defines these)
+  const int SCROLL_X_VALUATOR = 6;
+  const int SCROLL_Y_VALUATOR = 7;
+
+  // Get atoms for scroll valuator labels
+  Atom scrollXAtom = XInternAtom(m_display, "Scroll X", False);
+  Atom scrollYAtom = XInternAtom(m_display, "Scroll Y", False);
+
+  for (int i = 0; i < numDevices; i++) {
+    XIDeviceInfo *device = &devices[i];
+
+    // Only check master pointer devices
+    if (device->use != XIMasterPointer) {
+      continue;
+    }
+
+    // Check each valuator class
+    for (int j = 0; j < device->num_classes; j++) {
+      if (device->classes[j]->type != XIValuatorClass) {
+        continue;
+      }
+
+      XIValuatorClassInfo *valuator = reinterpret_cast<XIValuatorClassInfo *>(device->classes[j]);
+
+      // Check if this is a scroll valuator by label or number
+      if (valuator->label == scrollXAtom && m_scrollValuatorX < 0) {
+        m_scrollValuatorX = valuator->number;
+        LOG_DEBUG("XI2: Found horizontal scroll valuator: %d (by label)", m_scrollValuatorX);
+      } else if (valuator->label == scrollYAtom && m_scrollValuatorY < 0) {
+        m_scrollValuatorY = valuator->number;
+        LOG_DEBUG("XI2: Found vertical scroll valuator: %d (by label)", m_scrollValuatorY);
+      } else if (valuator->number == SCROLL_X_VALUATOR && m_scrollValuatorX < 0) {
+        // Fallback: use standard valuator IDs if labels not available
+        m_scrollValuatorX = SCROLL_X_VALUATOR;
+        LOG_DEBUG("XI2: Using standard horizontal scroll valuator: %d", m_scrollValuatorX);
+      } else if (valuator->number == SCROLL_Y_VALUATOR && m_scrollValuatorY < 0) {
+        m_scrollValuatorY = SCROLL_Y_VALUATOR;
+        LOG_DEBUG("XI2: Using standard vertical scroll valuator: %d", m_scrollValuatorY);
+      }
+    }
+  }
+
+  XIFreeDeviceInfo(devices);
+
+  if (m_scrollValuatorX >= 0 || m_scrollValuatorY >= 0) {
+    LOG_INFO("XI2: Smooth scrolling enabled (X=%d, Y=%d)", m_scrollValuatorX, m_scrollValuatorY);
+  } else {
+    LOG_DEBUG("XI2: No scroll valuators found, using Button4/5 fallback");
+  }
+}
+
+void XWindowsScreen::handleXIRawMotionScroll(XIRawEvent *rawEvent)
+{
+  if (!m_isPrimary) {
+    return;
+  }
+
+  // Check if scroll valuators are present in this event
+  bool hasScrollX = (m_scrollValuatorX >= 0) && XIMaskIsSet(rawEvent->valuators.mask, m_scrollValuatorX);
+  bool hasScrollY = (m_scrollValuatorY >= 0) && XIMaskIsSet(rawEvent->valuators.mask, m_scrollValuatorY);
+
+  if (!hasScrollX && !hasScrollY) {
+    return;  // No scroll valuators changed
+  }
+
+  // Ratio: 10 pixels == one wheel click (same as EiScreen)
+  static const int s_pixelsPerWheelClick = 10;
+  static const int s_pixelToWheelRatio = 120 / s_pixelsPerWheelClick;
+
+  double dx = 0.0;
+  double dy = 0.0;
+
+  // Extract scroll valuator deltas from the raw event
+  // The valuators.values array contains deltas for each valuator that changed
+  // We need to find the index of our scroll valuators in the changed valuators
+  double *valuatorValues = rawEvent->valuators.values;
+  int valuatorIndex = 0;
+
+  // Iterate through all possible valuators to find scroll valuators
+  for (int i = 0; i < rawEvent->valuators.mask_len * 8; i++) {
+    if (XIMaskIsSet(rawEvent->valuators.mask, i)) {
+      if (i == m_scrollValuatorX) {
+        dx = valuatorValues[valuatorIndex];
+      } else if (i == m_scrollValuatorY) {
+        dy = valuatorValues[valuatorIndex];
+      }
+      valuatorIndex++;
+    }
+  }
+
+  // If no scroll deltas, return early
+  if (dx == 0.0 && dy == 0.0) {
+    return;
+  }
+
+  LOG_DEBUG1("XI2: scroll valuator deltas (%.2f, %.2f)", dx, dy);
+
+  // Accumulate with remainder (like EiScreen pattern)
+  dx += m_scrollRemainder.x;
+  dy += m_scrollRemainder.y;
+
+  double x;
+  double y;
+  double rx = modf(dx, &x);
+  double ry = modf(dy, &y);
+
+  // Convert to multiples of 120 (standard wheel click)
+  int32_t xDelta = static_cast<int32_t>(x * s_pixelToWheelRatio);
+  int32_t yDelta = static_cast<int32_t>(y * s_pixelToWheelRatio);
+
+  // Store remainder for next event
+  m_scrollRemainder.x = rx;
+  m_scrollRemainder.y = ry;
+
+  // Send wheel event if there's any delta
+  if (xDelta != 0 || yDelta != 0) {
+    // Invert direction to match X11 convention (same as EiScreen)
+    sendEvent(EventTypes::PrimaryScreenWheel, WheelInfo::alloc(-xDelta, -yDelta));
+    LOG_DEBUG1("XI2: sent wheel event (xDelta=%d, yDelta=%d)", -xDelta, -yDelta);
+  }
 }
 #endif

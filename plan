@@ -38,52 +38,104 @@ Implement XI2 smooth scrolling support in deskflow/deskflow to enable modern tou
   - **Configuration**: Using `tlsEnabled=false` for testing
   - Server config: `deskflow-server.conf` with screens and links configured
   - Key remapping: Synergy-style config applied (super/ctrl swap for Linux client)
-- [ ] Establish baseline behavior:
-  - [ ] Test pointer movement (verify working)
-  - [ ] Test current scrolling (Button4/5 events)
-  - [ ] Document current scroll behavior (choppy, step-based)
+- [x] Establish baseline behavior:
+  - [x] Test pointer movement (verify working)
+  - [x] Test current scrolling (Button4/5 events)
+  - [x] Document current scroll behavior (choppy, step-based)
+    - **Observed**: Scrolling 3 lines at a time using Button4/5
+    - **Expected**: Smooth scrolling with fractional deltas via XI2 valuators
   - [ ] Test with various input devices:
     - [ ] Traditional mouse with wheel
     - [ ] Touchpad
     - [ ] Trackball
-- [ ] Document "baseline broken" state for reference
+- [x] Document "baseline broken" state for reference
+  - **Status**: Button4/5 works but choppy (3 lines per click)
 
 ---
 
 ## Phase 2: Code Investigation (Week 1-2)
 
 ### 2.1 Locate X11 Input Backend
-- [ ] Find X11 input handling code
-- [ ] Identify pointer motion handling location
-- [ ] Locate Button4/5 wheel event handlers
-- [ ] Map code flow: input → internal messages
+- [x] Find X11 input handling code
+  - **Location**: `deskflow/src/lib/platform/XWindowsScreen.cpp`
+  - **Key class**: `XWindowsScreen` (implements `PlatformScreen`)
+- [x] Identify pointer motion handling location
+  - **XI2 motion**: Lines 1174-1198 (`XI_RawMotion` events)
+  - **Legacy motion**: `onMouseMove()` method (line 1480+)
+- [x] Locate Button4/5 wheel event handlers
+  - **Location**: `XWindowsScreen::onMouseRelease()` lines 1470-1476
+  - **Current implementation**: Hardcoded ±120 deltas
+  - **Code**: `WheelInfo::alloc(0, 120)` for Button4, `WheelInfo::alloc(0, -120)` for Button5
+- [x] Map code flow: input → internal messages
+  - **Input**: X11 ButtonRelease events (button 4/5)
+  - **Handler**: `onMouseRelease()` → `sendEvent(PrimaryScreenWheel, WheelInfo::alloc(...))`
+  - **Internal**: `WheelInfo` struct with `int32_t m_xDelta, m_yDelta` (multiples of 120)
 
 ### 2.2 Understand XI2 Implementation
-- [ ] Find existing XI2 motion handling code
-- [ ] Understand current XI2 subscription setup
-- [ ] Review valuator handling patterns
-- [ ] Identify where scroll valuators would fit
+- [x] Find existing XI2 motion handling code
+  - **Location**: `XWindowsScreen.cpp` lines 1174-1198
+  - **Detection**: `detectXI2()` (line 1945) checks for XInputExtension
+  - **Subscription**: `selectXIRawMotion()` (line 1953) subscribes to `XI_RawMotion` and `XI_RawKeyRelease`
+- [x] Understand current XI2 subscription setup
+  - Uses `XISelectEvents()` with `XIAllMasterDevices`
+  - Currently only subscribes to `XI_RawMotion` and `XI_RawKeyRelease`
+  - **Missing**: Scroll valuator events (need to add `XI_RawButton` or scroll valuators)
+- [x] Review valuator handling patterns
+  - **Reference**: `EiScreen::onPointerScrollEvent()` (lines 659-706) shows perfect pattern:
+    - Uses fractional deltas (`double dx, dy`)
+    - Accumulates remainders using `modf()` for sub-pixel precision
+    - Converts to multiples of 120 (standard wheel click)
+- [x] Identify where scroll valuators would fit
+  - **Need to add**: Scroll valuator subscription in `selectXIRawMotion()` or new method
+  - **Need to add**: Scroll valuator event handler in `handleSystemEvent()` (around line 1174)
+  - **Valuator IDs**: Typically `SCROLL_X` (6) and `SCROLL_Y` (7) in XI2
 
 ### 2.3 Understand Internal Scroll Messages
-- [ ] Find Deskflow's internal scroll message format
-- [ ] Understand current delta representation (likely integer steps)
-- [ ] Determine if fractional deltas are supported
-- [ ] Map Button4/5 → internal message conversion
+- [x] Find Deskflow's internal scroll message format
+  - **Class**: `IPrimaryScreen::WheelInfo` (`deskflow/src/lib/deskflow/IPrimaryScreen.h` lines 51-59)
+  - **Fields**: `int32_t m_xDelta, m_yDelta` (multiples of 120)
+  - **Allocation**: `WheelInfo::alloc(xDelta, yDelta)` static method
+- [x] Understand current delta representation (likely integer steps)
+  - **Current**: Integer multiples of 120 (standard wheel click)
+  - **Button4**: `+120` (forward/away from user)
+  - **Button5**: `-120` (backward/toward user)
+  - **No fractional support** in current X11 implementation
+- [x] Determine if fractional deltas are supported
+  - **WheelInfo**: Only supports `int32_t`, so no fractional deltas directly
+  - **Solution**: Use remainder accumulator pattern (like `EiScreen`) to accumulate fractional parts
+  - **Conversion**: Convert fractional scroll deltas to multiples of 120, accumulate remainders
+- [x] Map Button4/5 → internal message conversion
+  - **Flow**: `XButtonEvent` (button 4/5) → `onMouseRelease()` → `WheelInfo::alloc(0, ±120)` → `PrimaryScreenWheel` event
+  - **Note**: X-axis scrolling not supported (see `// XXX -- support x-axis scrolling` comments)
 
 ---
 
 ## Phase 3: Implementation (Week 2-3)
 
 ### 3.1 XI2 Scroll Subscription
-- [ ] Extend XI2 setup to subscribe to scroll valuators
-- [ ] Add valuator mask for scroll axes
-- [ ] Handle valuator device changes
+- [x] Extend XI2 setup to subscribe to scroll valuators
+  - **Implementation**: Added `detectScrollValuators()` method
+  - **Detection**: Queries XI2 devices to find scroll valuators (typically 6 and 7)
+  - **Fallback**: Uses standard valuator IDs if labels not available
+- [x] Add valuator mask for scroll axes
+  - **Implementation**: Scroll valuators detected and stored in `m_scrollValuatorX` and `m_scrollValuatorY`
+  - **Event subscription**: Already subscribed via `XI_RawMotion` events
+- [x] Handle valuator device changes
+  - **Note**: Currently detects at initialization; device hotplugging not yet handled
 
 ### 3.2 Scroll Event Handling
-- [ ] Implement XI2 scroll valuator event handler
-- [ ] Extract delta values from valuator events
-- [ ] Convert valuator deltas to Deskflow scroll messages
-- [ ] Support fractional deltas (not just +1/-1 steps)
+- [x] Implement XI2 scroll valuator event handler
+  - **Method**: `handleXIRawMotionScroll()` processes scroll valuator deltas from `XI_RawMotion` events
+  - **Location**: Called from `handleSystemEvent()` when `XI_RawMotion` detected
+- [x] Extract delta values from valuator events
+  - **Implementation**: Extracts scroll valuator deltas from `XIRawEvent->valuators.values` array
+  - **Mask checking**: Uses `XIMaskIsSet()` to identify which valuators changed
+- [x] Convert valuator deltas to Deskflow scroll messages
+  - **Conversion**: Uses 10 pixels = 1 wheel click ratio (120 units)
+  - **Format**: Converts to `WheelInfo::alloc(xDelta, yDelta)` format
+- [x] Support fractional deltas (not just +1/-1 steps)
+  - **Pattern**: Uses remainder accumulator (`ScrollRemainder` struct) like `EiScreen`
+  - **Implementation**: Uses `modf()` to accumulate fractional parts between events
 
 ### 3.3 Feature Flagging
 - [ ] Add config option: `experimental_xi2_smooth_scrolling` (or similar)
